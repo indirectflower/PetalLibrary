@@ -1,16 +1,3 @@
---[[
-    Petal UI library
-    Usage:
-        local Petal = loadstring(game:HttpGet("..."))()
-        local Window = Petal.new({ Title = "Hub", Script = "hub.lua", Build = "dev", Theme = "Petal", MenuKey = Enum.KeyCode.Insert })
-        Window:Category("Main")
-        local Tab = Window:Tab({ Name = "Main", Icon = "target" })
-        local Sec = Tab:Section({ Name = "Section", Icon = "cube", Side = 1 })
-        Sec:Toggle({ Name = "Enabled", Default = false, Keybind = Enum.KeyCode.R, Callback = function(v) end })
-        Window:Category("Settings")
-        Window:BuildSettings(Window:Tab({ Name = "Settings", Icon = "gear" }))
-]]
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
