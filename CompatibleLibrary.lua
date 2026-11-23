@@ -1,31 +1,3 @@
---[[
-    PetalLinoria - Linoria API on top of the Petal UI library
-
-    REQUIRED one-line patch in the Petal source (put it right after `local function attachExtras ... end`,
-    e.g. directly above `local function registerFlag`):
-
-        function Section:_extras(item, o, name) return attachExtras(self, item, o, name) end
-
-    Usage (same keys/names as Linoria):
-
-        local Petal = loadstring(game:HttpGet("<petal.lua url>"))()
-        local Library, ThemeManager, SaveManager = loadstring(game:HttpGet("<PetalLinoria.lua url>"))(Petal)
-
-        local Window = Library:CreateWindow({ Title = "Hub", AutoShow = true })
-        local Tab = Window:AddTab("Main")
-        local Box = Tab:AddLeftGroupbox("Aimbot")
-        Box:AddToggle("AimEnabled", { Text = "Enabled", Default = false, Callback = function(v) end })
-        Box:AddLabel("Key"):AddKeyPicker("AimKey", { Default = "E", Mode = "Hold", Text = "Aim key" })
-        Toggles.AimEnabled:OnChanged(function() end)
-        Options.AimKey:GetState()
-
-    Known differences (Petal has no equivalent widget):
-      * Tabbox sub-tabs become separate groupboxes on that side.
-      * Tooltips, Slider:SetMin/SetMax, AllowNull, label wrapping, SetWatermark text are ignored/no-ops.
-      * Button:AddButton creates another full-width button row.
-      * ThemeManager/SaveManager both map to Petal's built-in settings (Window:BuildSettings).
-]]
-
 local Petal = ... or (typeof(getgenv) == "function" and getgenv().Petal)
 assert(Petal and Petal.new, "PetalLinoria: pass the Petal library: loadstring(src)(Petal)")
 
