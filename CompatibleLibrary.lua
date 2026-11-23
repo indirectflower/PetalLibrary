@@ -1,12 +1,36 @@
-local Petal = ... or (typeof(getgenv) == "function" and getgenv().Petal)
-assert(Petal and Petal.new, "PetalLinoria: pass the Petal library: loadstring(src)(Petal)")
+local genv = typeof(getgenv) == "function" and getgenv() or _G
+
+------------------------------------------------------------------ load Petal (auto-patched)
+local PETAL_URL = "https://raw.githubusercontent.com/indirectflower/PetalLibrary/refs/heads/main/Library.lua"
+local EXTRAS_PATCH = "function Section:_extras(item, o, name) return attachExtras(self, item, o, name) end"
+
+local function loadPetal()
+    local source = genv.PetalSource or PETAL_URL
+    local src
+    if string.match(source, "^https?://") then
+        src = game:HttpGet(source)
+    else
+        src = readfile(source)
+    end
+    -- Library.lua has no Section:_extras yet: inject it right above registerFlag
+    if not string.find(src, "function Section:_extras", 1, true) then
+        local patched, count = string.gsub(src, "local function registerFlag", function()
+            return EXTRAS_PATCH .. "\n\nlocal function registerFlag"
+        end, 1)
+        assert(count > 0, "PetalLinoria: could not apply the Section:_extras patch to Library.lua")
+        src = patched
+    end
+    return loadstring(src)()
+end
+
+local Petal = ... or genv.Petal or loadPetal()
+assert(Petal and Petal.new, "PetalLinoria: failed to load the Petal library")
 
 local Players = game:GetService("Players")
-local genv = typeof(getgenv) == "function" and getgenv() or _G
 
 ------------------------------------------------------------------ core tables
 local Library = {
-    Toggles = {}, Options = {}, Signals = {}, UnloadCallbacks = {},
+    Toggles = {}, Options = {}, Signals = {}, UnloadCallbacks = {}, Flags = {},
     Unloaded = false, Version = "Petal-Linoria",
 }
 local Toggles, Options = Library.Toggles, Library.Options
@@ -506,6 +530,216 @@ function ThemeManager:ApplyToGroupbox(gb)
     })
 end
 function ThemeManager:LoadDefault() end
+
+------------------------------------------------------------------ Orion adapter
+-- OrionLib:MakeWindow / Window:MakeTab / Tab:AddSection / Section:AddToggle ... / OrionLib.Flags / OrionLib:Init
+local OrionContainer, OrionWindow = {}, {}
+OrionContainer.__index = OrionContainer
+OrionWindow.__index = OrionWindow
+
+local function decimalsOf(inc)
+    local s = (string.format("%.6f", inc or 1):gsub("0+$", ""))
+    return #(string.match(s, "%.(%d*)$") or "")
+end
+
+local function regFlag(o, obj)
+    if o.Flag then Library.Flags[o.Flag] = obj end
+end
+
+-- only elements with Save = true and a Flag take part in Petal configs
+local function saveOpts(o, t)
+    if o.Save and o.Flag then t.Flag = o.Flag else t.NoSave = true end
+    return t
+end
+
+-- Orion fires the callback once with the default value after creating an element
+local function initFire(cb, v)
+    if cb and v ~= nil then task.defer(safe, cb, v) end
+end
+
+local function pickSide(counts)
+    local side = counts[1] <= counts[2] and 1 or 2
+    counts[side] = counts[side] + 1
+    return side
+end
+
+-- elements added straight on a tab live in a default section named after the tab
+function OrionContainer:_sec()
+    if not self.Section then
+        self.Section = self.Tab:Section({
+            Name = self.DefaultName or "Main", Icon = "cube", Side = pickSide(self.Counts),
+        })
+    end
+    return self.Section
+end
+
+function OrionContainer:AddSection(o)
+    o = type(o) == "string" and { Name = o } or o or {}
+    local sec = self.Tab:Section({ Name = o.Name or "Section", Icon = "cube", Side = pickSide(self.Counts) })
+    return setmetatable({ Tab = self.Tab, Counts = self.Counts, Section = sec, Window = self.Window }, OrionContainer)
+end
+
+function OrionContainer:AddLabel(text)
+    local l = self:_sec():Label({ Name = tostring(text or "") })
+    return l
+end
+
+function OrionContainer:AddParagraph(title, content)
+    local sec = self:_sec()
+    local head = sec:Label({ Name = tostring(title or "") })
+    local line = ""
+    local function flush()
+        if line ~= "" then sec:Label({ Name = line }) end
+        line = ""
+    end
+    for word in string.gmatch(tostring(content or ""), "%S+") do
+        if #line + #word + 1 > 34 then
+            flush()
+            line = word
+        else
+            line = line == "" and word or (line .. " " .. word)
+        end
+    end
+    flush()
+    return head
+end
+
+function OrionContainer:AddButton(o)
+    o = o or {}
+    local btn = self:_sec():Button({ Name = o.Name or "Button", Callback = function() safe(o.Callback) end })
+    function btn:Set(text)
+        local l = self.Instance:FindFirstChildWhichIsA("TextLabel", true)
+        if l then l.Text = tostring(text) end
+    end
+    return btn
+end
+
+function OrionContainer:AddToggle(o)
+    o = o or {}
+    local t = self:_sec():Toggle(saveOpts(o, {
+        Name = o.Name or "Toggle", Default = o.Default == true,
+        Callback = function(v) safe(o.Callback, v) end,
+    }))
+    regFlag(o, t)
+    initFire(o.Callback, o.Default == true)
+    return t
+end
+
+function OrionContainer:AddSlider(o)
+    o = o or {}
+    local s = self:_sec():Slider(saveOpts(o, {
+        Name = o.Name or "Slider", Min = o.Min or 0, Max = o.Max or 100, Default = o.Default,
+        Decimals = decimalsOf(o.Increment), Suffix = o.ValueName and (" " .. o.ValueName) or nil,
+        Callback = function(v) safe(o.Callback, v) end,
+    }))
+    regFlag(o, s)
+    initFire(o.Callback, s.Value)
+    return s
+end
+
+function OrionContainer:AddDropdown(o)
+    o = o or {}
+    local options = o.Options or {}
+    local d = self:_sec():Dropdown(saveOpts(o, {
+        Name = o.Name or "Dropdown", Options = options, Default = o.Default,
+        MaxRows = math.min(10, math.max(3, #options)),
+        Callback = function(v) safe(o.Callback, v) end,
+    }))
+    function d:Refresh(list)
+        list = list or {}
+        self:SetOptions(list)
+        if self.Value ~= nil and not table.find(list, self.Value) then self:Set(nil, true) end
+    end
+    regFlag(o, d)
+    if o.Default ~= nil and table.find(options, o.Default) then initFire(o.Callback, o.Default) end
+    return d
+end
+
+function OrionContainer:AddTextbox(o)
+    o = o or {}
+    local box
+    box = self:_sec():Textbox(saveOpts(o, {
+        Name = o.Name or "Textbox", Placeholder = o.Name, Default = o.Default or "",
+        Callback = function(text)
+            safe(o.Callback, text)
+            if o.TextDisappear and box then box:Set("", true) end
+        end,
+    }))
+    regFlag(o, box)
+    return box
+end
+
+function OrionContainer:AddColorpicker(o)
+    o = o or {}
+    local c = self:_sec():Colorpicker(saveOpts(o, {
+        Name = o.Name or "Colorpicker", Default = o.Default or Color3.new(1, 1, 1),
+        Callback = function(col) safe(o.Callback, col) end,
+    }))
+    regFlag(o, c)
+    initFire(o.Callback, c.Value)
+    return c
+end
+
+function OrionContainer:AddBind(o)
+    o = o or {}
+    local kb = self:_sec():Keybind(saveOpts(o, {
+        Name = o.Name or "Bind", Default = parseKey(o.Default), Mode = o.Hold and "Hold" or "Toggle",
+    }))
+    -- Orion: Bind.Value is the key name; Callback() on press, Callback(held) when Hold = true
+    kb.Value = kb.Key and kb.Key.Name or "Unknown"
+    kb.OnKeyChanged = function() kb.Value = kb.Key and kb.Key.Name or "Unknown" end
+    kb.OnPress = function()
+        if o.Hold then safe(o.Callback, true) else safe(o.Callback) end
+    end
+    kb.OnRelease = function()
+        if o.Hold then safe(o.Callback, false) end
+    end
+    regFlag(o, kb)
+    return kb
+end
+
+function OrionWindow:MakeTab(o)
+    o = type(o) == "string" and { Name = o } or o or {}
+    local pt = self.Petal:Tab({ Name = o.Name or "Tab", Icon = o.Icon or "cube" })
+    return setmetatable({
+        Tab = pt, Counts = { 0, 0 }, DefaultName = o.Name, Window = self.Petal,
+    }, OrionContainer)
+end
+
+function Library:MakeWindow(info)
+    info = type(info) == "string" and { Name = info } or info or {}
+    local pw = Petal.new({
+        Title = info.Name or "Orion", Script = info.Name, Build = "orion",
+        Theme = "Petal", MenuKey = Enum.KeyCode.RightShift,
+    })
+    self._pw = pw
+    self._orionSave = info.SaveConfig == true
+    self.ScreenGui = pw.Screen
+    self.KeybindFrame = pw.Hotkeys
+    return setmetatable({ Petal = pw }, OrionWindow)
+end
+
+function Library:MakeNotification(o)
+    o = o or {}
+    local name = tostring(o.Name or "")
+    local text = (o.Content and o.Content ~= "") and (name .. ": " .. tostring(o.Content)) or name
+    if self._pw then self._pw:Notify({ Text = text, Duration = o.Time }) end
+end
+
+-- with SaveConfig = true, Init() adds Petal's settings page (configs, autoload, theming, menu options)
+function Library:Init()
+    if self._orionSave and self._pw and not settingsBuilt then
+        settingsBuilt = true
+        self._pw:Category("Settings")
+        self._pw:BuildSettings(self._pw:Tab({ Name = "Settings", Icon = "gear" }))
+    end
+end
+
+function Library:IsRunning()
+    return self._pw ~= nil and not self.Unloaded
+end
+
+function Library:Destroy() self:Unload() end
 
 genv.Library = Library
 return Library, ThemeManager, SaveManager
